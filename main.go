@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -264,7 +263,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				})
 
 				if err == nil {
-					// Invia il messaggio nel nuovo canale con i bottoni di gestione
 					embed := &discordgo.MessageEmbed{
 						Title:       fmt.Sprintf("🎫 Ticket: %s", categoryTitle),
 						Description: fmt.Sprintf("Benvenuto nel tuo ticket, <@%s>.\nIl personale competente è stato notificato: %s\n\nUsa i pulsanti sottostanti per gestire il ticket.", i.Member.User.ID, pingRole),
@@ -286,7 +284,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			}
 		}
 
-		// Gestione Pulsanti Ticket (Claim, Unclaim, Chiudi con Transcript in DM)
 		if customID == "ticket_claim" {
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -306,7 +303,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 
 		if customID == "ticket_close" {
-			// Invio transcript in DM (simulato/raccolto) e chiusura canale
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
@@ -314,13 +310,11 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				},
 			})
 			
-			// Invio DM all'utente che ha chiuso/richiesto
 			dm, err := s.UserChannelCreate(i.Member.User.ID)
 			if err == nil {
 				s.ChannelMessageSend(dm.ID, "📄 Ecco il transcript del tuo ticket chiuso per Rome Italy RP 2.0 [E.H.]. Grazie per averci contattato.")
 			}
 
-			// Elimina il canale dopo pochi secondi
 			time.Sleep(3 * time.Second)
 			s.ChannelDelete(i.ChannelID)
 		}
