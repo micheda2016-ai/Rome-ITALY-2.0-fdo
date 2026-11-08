@@ -16,12 +16,13 @@ type ActivePatrol struct {
 	StartTime time.Time
 }
 
-// Configurazione dei canali del server (puoi personalizzarli o settarli via comando)
 var (
 	activePatrols = make(map[string]ActivePatrol)
 	openTickets   = 0
 
-	// Canali di configurazione predefiniti (modificabili o impostabili)
+	// Database temporaneo in memoria per i punti patente degli utenti (Default: 30 punti)
+	userLicensePoints = make(map[string]int)
+
 	logPatrolChannelID string
 	logTicketChannelID string
 )
@@ -84,7 +85,7 @@ func registerCommands(s *discordgo.Session) {
 	commands := []*discordgo.ApplicationCommand{
 		{
 			Name:        "setup",
-			Description: "Configura i canali di log (pattuglie, ticket) e invia i pannelli ufficiali",
+			Description: "Configura i canali di log e invia i pannelli ufficiali",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
@@ -101,7 +102,7 @@ func registerCommands(s *discordgo.Session) {
 				{
 					Type:        discordgo.ApplicationCommandOptionChannel,
 					Name:        "canale",
-					Description: "Il canale di destinazione per il pannello o per i log",
+					Description: "Il canale di destinazione",
 					Required:    true,
 				},
 			},
@@ -300,7 +301,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 						Components: []discordgo.MessageComponent{buttons},
 					})
 
-					// Invia log apertura ticket se configurato
 					if logTicketChannelID != "" {
 						s.ChannelMessageSend(logTicketChannelID, fmt.Sprintf("📂 Ticket aperto da <@%s> nella categoria **%s** (Canale: <#%s>)", i.Member.User.ID, categoryTitle, createdChannel.ID))
 					}
@@ -357,7 +357,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				delete(activePatrols, i.Member.User.ID)
 
 				reportText := data.Components[0].(*discordgo.ActionsRow).Components[0].(*discordgo.TextInput).Value
-
 				responseMsg := fmt.Sprintf("🔴 <@%s> ha terminato il turno. Durata: **%d minuti**.\n📝 **Report:** %s", i.Member.User.ID, minutes, reportText)
 
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -367,7 +366,6 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 					},
 				})
 
-				// Invia i log nel canale pattuglie configurato se esiste
 				if logPatrolChannelID != "" {
 					s.ChannelMessageSend(logPatrolChannelID, responseMsg)
 				}
@@ -387,7 +385,7 @@ func handleSetupCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("✅ Canale log pattuglie impostato con successo su <#%s>!", canale.ID),
+				Content: fmt.Sprintf("✅ Canale log pattuglie impostato su <#%s>!", canale.ID),
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
@@ -397,7 +395,7 @@ func handleSetupCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: fmt.Sprintf("✅ Canale log ticket impostato con successo su <#%s>!", canale.ID),
+				Content: fmt.Sprintf("✅ Canale log ticket impostato su <#%s>!", canale.ID),
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
@@ -459,27 +457,61 @@ func handlePatenteCommand(s *discordgo.Session, i *discordgo.InteractionCreate) 
 	nomeRoblox := options[1].StringValue()
 	tipo := options[2].StringValue()
 
+	// Inizializza la patente con 30 punti di default
+	userLicensePoints[user.ID] = 30
+
 	dm, err := s.UserChannelCreate(user.ID)
 	if err == nil {
-		s.ChannelMessageSend(dm.ID, fmt.Sprintf("🪪 Patente Tipo **%s** rilasciata per **%s**! Partenza ufficiale con **30 punti patente**.", tipo, nomeRoblox))
+		s.ChannelMessageSend(dm.ID, fmt.Sprintf("🪪 Patente Tipo **%s** rilasciata per **%s**! Hai iniziato con **30 punti** patente.", tipo, nomeRoblox))
 	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("✅ Patente **Tipo %s** rilasciata a <@%s> (`%s`). 30 punti iniziali assegnati e notifica inviata in DM.", tipo, user.ID, nomeRoblox),
+			Content: fmt.Sprintf("✅ Patente **Tipo %s** rilasciata a <@%s> (`%s`). 30 punti iniziali assegnati e notificati in DM.", tipo, user.ID, nomeRoblox),
 		},
 	})
 }
 
 func handleDecurtaPuntiCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	opts := i.ApplicationCommandData().Options
+	targetUser := opts[0].UserValue(s)
+	nomeRoblox := opts[1].StringValue()
+	motivo := opts[2].StringValue()
+	puntiDaDecurtare := int(opts[3].IntValue())
+
+	// Se l'utente non ha una patente registrata, partiamo da 30 di default
+	if _, exists := userLicensePoints[targetUser.ID]; !exists {
+		userLicensePoints[targetUser.ID] = 30
+	}
+
+	// Sottrae i punti
+	userLicensePoints[targetUser.ID] -= puntiDaDecurtare
+	if userLicensePoints[targetUser.ID] < 0 {
+		userLicensePoints[targetUser.ID] = 0
+	}
+	puntiRimasti := userLicensePoints[targetUser.ID]
+
+	// Invia notifica in DM all'utente sanzionato
+	dm, err := s.UserChannelCreate(targetUser.ID)
+	if err == nil {
+		s.ChannelMessageSend(dm.ID, fmt.Sprintf("🚨 **Sanzione Stradale / FDO**\nTi sono stati decurtati **-%d punti** dalla patente (`%s`).\n📉 **Motivo:** %s\n✨ **Punti patente residui:** `%d/30`", puntiDaDecurtare, nomeRoblox, motivo, puntiRimasti))
+	}
+
+	// Risponde al comando nel canale
+	responseMsg := fmt.Sprintf("📉 Punti decurtati a <@%s> (`%s`): `-%d punti`. Punti rimasti: **%d/30**. Motivo: %s", targetUser.ID, nomeRoblox, puntiDaDecurtare, puntiRimasti, motivo)
+	
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("📉 Punti decurtati con successo a <@%s> (`-%d` punti). Motivo: %s", opts[0].UserValue(s).ID, opts[3].IntValue(), opts[2].StringValue()),
+			Content: responseMsg,
 		},
 	})
+
+	// Invia nei log se configurato
+	if logTicketChannelID != "" {
+		s.ChannelMessageSend(logTicketChannelID, fmt.Sprintf("📜 **Log Sanzione:** %s", responseMsg))
+	}
 }
 
 func handlePromozioneCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
