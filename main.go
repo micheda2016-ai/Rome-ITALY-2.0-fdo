@@ -16,9 +16,14 @@ type ActivePatrol struct {
 	StartTime time.Time
 }
 
+// Configurazione dei canali del server (puoi personalizzarli o settarli via comando)
 var (
 	activePatrols = make(map[string]ActivePatrol)
 	openTickets   = 0
+
+	// Canali di configurazione predefiniti (modificabili o impostabili)
+	logPatrolChannelID string
+	logTicketChannelID string
 )
 
 func main() {
@@ -79,23 +84,24 @@ func registerCommands(s *discordgo.Session) {
 	commands := []*discordgo.ApplicationCommand{
 		{
 			Name:        "setup",
-			Description: "Configura e invia i pannelli ufficiali nel canale scelto",
+			Description: "Configura i canali di log (pattuglie, ticket) e invia i pannelli ufficiali",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "tipo",
-					Description: "Quale pannello vuoi configurare e inviare?",
+					Name:        "azione",
+					Description: "Cosa vuoi configurare o inviare?",
 					Required:    true,
 					Choices: []*discordgo.ApplicationCommandOptionChoice{
-						{Name: "Pannello Pattuglie", Value: "pattuglia"},
-						{Name: "Pannello Ticket", Value: "ticket"},
-						{Name: "Entrambi i Pannelli", Value: "tutti"},
+						{Name: "Invia Pannello Pattuglie", Value: "panel_patrol"},
+						{Name: "Invia Pannello Ticket", Value: "panel_ticket"},
+						{Name: "Imposta Canale Log Pattuglie", Value: "set_log_patrol"},
+						{Name: "Imposta Canale Log Ticket", Value: "set_log_ticket"},
 					},
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionChannel,
 					Name:        "canale",
-					Description: "Il canale in cui inviare il pannello scelto",
+					Description: "Il canale di destinazione per il pannello o per i log",
 					Required:    true,
 				},
 			},
@@ -293,6 +299,11 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 						Embeds:     []*discordgo.MessageEmbed{embed},
 						Components: []discordgo.MessageComponent{buttons},
 					})
+
+					// Invia log apertura ticket se configurato
+					if logTicketChannelID != "" {
+						s.ChannelMessageSend(logTicketChannelID, fmt.Sprintf("📂 Ticket aperto da <@%s> nella categoria **%s** (Canale: <#%s>)", i.Member.User.ID, categoryTitle, createdChannel.ID))
+					}
 				}
 			}
 		}
@@ -328,6 +339,10 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				s.ChannelMessageSend(dm.ID, "📄 Ecco il transcript del tuo ticket chiuso per Rome Italy RP 2.0 [E.H.]. Grazie per averci contattato.")
 			}
 
+			if logTicketChannelID != "" {
+				s.ChannelMessageSend(logTicketChannelID, fmt.Sprintf("🔒 Ticket chiuso da <@%s>.", i.Member.User.ID))
+			}
+
 			time.Sleep(3 * time.Second)
 			s.ChannelDelete(i.ChannelID)
 		}
@@ -343,12 +358,19 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 				reportText := data.Components[0].(*discordgo.ActionsRow).Components[0].(*discordgo.TextInput).Value
 
+				responseMsg := fmt.Sprintf("🔴 <@%s> ha terminato il turno. Durata: **%d minuti**.\n📝 **Report:** %s", i.Member.User.ID, minutes, reportText)
+
 				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 					Type: discordgo.InteractionResponseChannelMessageWithSource,
 					Data: &discordgo.InteractionResponseData{
-						Content: fmt.Sprintf("🔴 <@%s> ha terminato il turno. Durata: **%d minuti**.\n📝 **Report:** %s", i.Member.User.ID, minutes, reportText),
+						Content: responseMsg,
 					},
 				})
+
+				// Invia i log nel canale pattuglie configurato se esiste
+				if logPatrolChannelID != "" {
+					s.ChannelMessageSend(logPatrolChannelID, responseMsg)
+				}
 			}
 		}
 	}
@@ -356,54 +378,79 @@ func handleInteractions(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 func handleSetupCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	options := i.ApplicationCommandData().Options
-	tipo := options[0].StringValue()
+	azione := options[0].StringValue()
 	canale := options[1].ChannelValue(s)
 
-	patrolEmbed := &discordgo.MessageEmbed{
-		Title:       "🟢 Gestione Pattuglie FDO",
-		Description: fmt.Sprintf("Usa i pulsanti per iniziare o terminare il servizio.\n\n👥 **Agenti in servizio:** `%d`", len(activePatrols)),
-		Color:       0x0055ff,
-	}
-	patrolButtons := discordgo.ActionsRow{
-		Components: []discordgo.MessageComponent{
-			discordgo.Button{Label: "Inizia Turno", Style: discordgo.SuccessButton, CustomID: "btn_start_patrol", Emoji: &discordgo.ComponentEmoji{Name: "🟢"}},
-			discordgo.Button{Label: "Finisci Turno", Style: discordgo.DangerButton, CustomID: "btn_end_patrol", Emoji: &discordgo.ComponentEmoji{Name: "🔴"}},
-		},
-	}
+	switch azione {
+	case "set_log_patrol":
+		logPatrolChannelID = canale.ID
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("✅ Canale log pattuglie impostato con successo su <#%s>!", canale.ID),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 
-	ticketEmbed := &discordgo.MessageEmbed{
-		Title:       "🎫 Sportello Richieste & Segnalazioni FDO",
-		Description: fmt.Sprintf("Seleziona una categoria per aprire un ticket privato.\n\n📊 **Ticket aperti:** `%d`", openTickets),
-		Color:       0xffaa00,
-	}
-	ticketMenu := discordgo.ActionsRow{
-		Components: []discordgo.MessageComponent{
-			discordgo.SelectMenu{
-				CustomID:    "select_ticket_category",
-				Placeholder: "Seleziona il motivo del ticket...",
-				Options: []discordgo.SelectMenuOption{
-					{Label: "Ricorso Sanzioni / Denunce", Value: "cat_ricorso", Description: "Contesta sanzioni o sporgi denuncia", Emoji: &discordgo.ComponentEmoji{Name: "⚖️"}},
-					{Label: "Richiesta Piani Alti", Value: "cat_piani_alti", Description: "Contatta l'Alto Comando", Emoji: &discordgo.ComponentEmoji{Name: "👑"}},
-					{Label: "Informazioni Generali", Value: "cat_info", Description: "Domande sul regolamento", Emoji: &discordgo.ComponentEmoji{Name: "❓"}},
+	case "set_log_ticket":
+		logTicketChannelID = canale.ID
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("✅ Canale log ticket impostato con successo su <#%s>!", canale.ID),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+
+	case "panel_patrol":
+		patrolEmbed := &discordgo.MessageEmbed{
+			Title:       "🟢 Gestione Pattuglie FDO",
+			Description: fmt.Sprintf("Usa i pulsanti per iniziare o terminare il servizio.\n\n👥 **Agenti in servizio:** `%d`", len(activePatrols)),
+			Color:       0x0055ff,
+		}
+		patrolButtons := discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.Button{Label: "Inizia Turno", Style: discordgo.SuccessButton, CustomID: "btn_start_patrol", Emoji: &discordgo.ComponentEmoji{Name: "🟢"}},
+				discordgo.Button{Label: "Finisci Turno", Style: discordgo.DangerButton, CustomID: "btn_end_patrol", Emoji: &discordgo.ComponentEmoji{Name: "🔴"}},
+			},
+		}
+		s.ChannelMessageSendComplex(canale.ID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{patrolEmbed}, Components: []discordgo.MessageComponent{patrolButtons}})
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("✅ Pannello Pattuglie inviato in <#%s>!", canale.ID),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+
+	case "panel_ticket":
+		ticketEmbed := &discordgo.MessageEmbed{
+			Title:       "🎫 Sportello Richieste & Segnalazioni FDO",
+			Description: fmt.Sprintf("Seleziona una categoria per aprire un ticket privato.\n\n📊 **Ticket aperti:** `%d`", openTickets),
+			Color:       0xffaa00,
+		}
+		ticketMenu := discordgo.ActionsRow{
+			Components: []discordgo.MessageComponent{
+				discordgo.SelectMenu{
+					CustomID:    "select_ticket_category",
+					Placeholder: "Seleziona il motivo del ticket...",
+					Options: []discordgo.SelectMenuOption{
+						{Label: "Ricorso Sanzioni / Denunce", Value: "cat_ricorso", Description: "Contesta sanzioni o sporgi denuncia", Emoji: &discordgo.ComponentEmoji{Name: "⚖️"}},
+						{Label: "Richiesta Piani Alti", Value: "cat_piani_alti", Description: "Contatta l'Alto Comando", Emoji: &discordgo.ComponentEmoji{Name: "👑"}},
+						{Label: "Informazioni Generali", Value: "cat_info", Description: "Domande sul regolamento", Emoji: &discordgo.ComponentEmoji{Name: "❓"}},
+					},
 				},
 			},
-		},
-	}
-
-	if tipo == "pattuglia" || tipo == "tutti" {
-		s.ChannelMessageSendComplex(canale.ID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{patrolEmbed}, Components: []discordgo.MessageComponent{patrolButtons}})
-	}
-	if tipo == "ticket" || tipo == "tutti" {
+		}
 		s.ChannelMessageSendComplex(canale.ID, &discordgo.MessageSend{Embeds: []*discordgo.MessageEmbed{ticketEmbed}, Components: []discordgo.MessageComponent{ticketMenu}})
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("✅ Pannello Ticket inviato in <#%s>!", canale.ID),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 	}
-
-	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: fmt.Sprintf("✅ Pannello/i configurati e inviati con successo nel canale <#%s>!", canale.ID),
-			Flags:   discordgo.MessageFlagsEphemeral,
-		},
-	})
 }
 
 func handlePatenteCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
