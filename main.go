@@ -240,12 +240,12 @@ func handleModalSubmits(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Components: []discordgo.MessageComponent{
 					discordgo.Button{
 						Label:    "Accetta",
-						Style:    discordgo.ButtonStyleSuccess,
+						Style:    discordgo.ButtonStyle(3), // 3 = Success (Verde)
 						CustomID: "patente_accetta",
 					},
 					discordgo.Button{
 						Label:    "Rifiuta",
-						Style:    discordgo.ButtonStyleDanger,
+						Style:    discordgo.ButtonStyle(4), // 4 = Danger (Rosso)
 						CustomID: "patente_rifiuta",
 					},
 				},
