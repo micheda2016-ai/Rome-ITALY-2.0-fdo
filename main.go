@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/tls"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -13,11 +14,13 @@ import (
 )
 
 var (
-	Token            = os.Getenv("TOKEN")
-	LogChannelID     = "ID_CANALE_LOG"      // Inserisci l'ID del canale log
-	TicketCategoryID = "ID_CATEGORIA_TICKET" // Inserisci l'ID della categoria ticket
-	TLSCertFile      = "cert.pem"           // Percorso del certificato SSL/TLS
-	TLSKeyFile       = "key.pem"            // Percorso della chiave privata SSL/TLS
+	Token             = os.Getenv("TOKEN")
+	LogChannelID      = "ID_CANALE_LOG"      // Inserisci l'ID del canale log
+	TicketCategoryID  = "ID_CATEGORIA_TICKET" // Inserisci l'ID della categoria ticket
+	TLSCertFile       = "cert.pem"           // Percorso del certificato SSL/TLS
+	TLSKeyFile        = "key.pem"            // Percorso della chiave privata SSL/TLS
+	activeTurns       = 0                    // Contatore dinamico turni
+	activeTicketsCount = 0                   // Contatore ticket aperti
 )
 
 func main() {
@@ -26,7 +29,6 @@ func main() {
 		log.Fatalf("Errore nella creazione della sessione: %v", err)
 	}
 
-	// Intenti necessari per bottoni, modali e gestione membri
 	sess.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsGuildMembers |
@@ -53,10 +55,9 @@ func main() {
 	}
 	defer sess.Close()
 
-	// Configurazione e avvio del server HTTPS per il KeePassLive
+	// Avvio server HTTPS per KeePassLive
 	go startHTTPServer()
 
-	// Registrazione comandi slash
 	registerCommands(sess)
 
 	fmt.Println("Bot avviato con successo. Premi CTRL-C per uscire.")
@@ -65,7 +66,6 @@ func main() {
 	<-sc
 }
 
-// Configurazione del server HTTPS
 func startHTTPServer() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +95,11 @@ func registerCommands(s *discordgo.Session) {
 		},
 		{
 			Name:        "turno",
-			Description: "Gestisci il tuo turno (Avvia/Termina)",
+			Description: "Avvia o termina il tuo turno di servizio",
+		},
+		{
+			Name:        "ticket_panel",
+			Description: "Invia il pannello per aprire un ticket",
 		},
 		{
 			Name:        "promuovi",
@@ -183,11 +187,37 @@ func handleSlashCommands(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 
 	case "turno":
+		activeTurns++
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: "🟢 **Turno avviato con successo!** Posizione in servizio: **1**",
+				Content: fmt.Sprintf("🟢 **Turno avviato con successo!** Agenti in servizio attivi: **%d**", activeTurns),
 				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+
+	case "ticket_panel":
+		embed := &discordgo.MessageEmbed{
+			Title:       "🎫 Centro Assistenza - Ticket",
+			Description: "Clicca il bottone sottostante per aprire un ticket con il nostro staff.\n📊 **Ticket attualmente aperti:** " + fmt.Sprintf("%d", activeTicketsCount),
+			Color:       0x3498db,
+		}
+		components := []discordgo.MessageComponent{
+			discordgo.ActionsRow{
+				Components: []discordgo.MessageComponent{
+					discordgo.Button{
+						Label:    "Apri Ticket",
+						Style:    discordgo.ButtonStyle(1), // 1 = Primary (Blurple)
+						CustomID: "open_ticket",
+					},
+				},
+			},
+		}
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Embeds:     []*discordgo.MessageEmbed{embed},
+				Components: components,
 			},
 		})
 
@@ -240,12 +270,12 @@ func handleModalSubmits(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				Components: []discordgo.MessageComponent{
 					discordgo.Button{
 						Label:    "Accetta",
-						Style:    discordgo.ButtonStyle(3), // 3 = Success (Verde)
+						Style:    discordgo.ButtonStyle(3),
 						CustomID: "patente_accetta",
 					},
 					discordgo.Button{
 						Label:    "Rifiuta",
-						Style:    discordgo.ButtonStyle(4), // 4 = Danger (Rosso)
+						Style:    discordgo.ButtonStyle(4),
 						CustomID: "patente_rifiuta",
 					},
 				},
@@ -298,5 +328,43 @@ func handleComponents(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		if err == nil {
 			s.ChannelMessageSend(channels.ID, fmt.Sprintf("La tua richiesta di patente è stata: %s", esito))
 		}
+	} else if data.CustomID == "open_ticket" {
+		activeTicketsCount++
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: fmt.Sprintf("🔒 Ticket aperto con successo! (Totale attivi: %d). Usa /chiudi_ticket per generare il transcript.", activeTicketsCount),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+	} else if data.CustomID == "close_ticket" {
+		if activeTicketsCount > 0 {
+			activeTicketsCount--
+		}
+		// Generazione file transcript fittizio da inviare in DM
+		fileData := []byte("--- TRANSCRIPT TICKET CHAT LOG ---\nUtente: Chiusura ticket effettuata.\nStato: Chiuso con successo.")
+		tmpFile, err := ioutil.TempFile("", "transcript-*.txt")
+		if err == nil {
+			defer os.Remove(tmpFile.Name())
+			tmpFile.Write(fileData)
+			tmpFile.Close()
+
+			dmChannel, errDM := s.UserChannelCreate(i.Member.User.ID)
+			if errDM == nil {
+				f, errOpen := os.Open(tmpFile.Name())
+				if errOpen == nil {
+					defer f.Close()
+					s.ChannelFileSend(dmChannel.ID, "transcript.txt", f)
+				}
+			}
+		}
+
+		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content: "📁 Ticket chiuso. Il file di transcript è stato inviato nei tuoi DM.",
+				Components: []discordgo.MessageComponent{},
+			},
+		})
 	}
 }
