@@ -279,7 +279,7 @@ func handleComponents(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		color := 0x2ecc71
 		if data.CustomID == "patente_rifiuta" {
 			esito = "❌ **RIFIUTATA**"
-			color := 0xe74c3c
+			color = 0xe74c3c
 		}
 
 		embed := i.Message.Embeds[0]
@@ -300,4 +300,3 @@ func handleComponents(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		}
 	}
 }
-
